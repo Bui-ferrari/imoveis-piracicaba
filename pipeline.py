@@ -1,33 +1,6 @@
 #!/usr/bin/env python3
 """
 Pipeline de classificação e geração do dashboard de imóveis de Piracicaba.
-
-Uso:
-  1. Colete listagens brutas (via WebFetch, feito pelo Claude) e salve como uma
-     lista de dicts em raw_listings.json (formato abaixo).
-  2. Rode: python3 pipeline.py raw_listings.json dataset.json dashboard.html
-     - dataset.json é o "banco de dados" acumulado (lido se já existir, e
-       sobrescrito com a versão atualizada). É esse arquivo que deve ser
-       guardado no Project entre execuções.
-     - dashboard.html é o arquivo final entregue ao usuário.
-
-Formato esperado de cada item em raw_listings.json:
-{
-  "titulo": str,
-  "bairro": str,
-  "tipo": str,           # "casa" | "apartamento" | "chacara" | "terreno" | "comercial" | ...
-  "transacao": str,      # "venda" | "aluguel"
-  "area_m2": float|null, # área principal informada (construída OU terreno, o que veio)
-  "area_terreno_m2": float|null,
-  "quartos": int|null,
-  "suites": int|null,
-  "condominio_fechado": bool|null,
-  "edicula": bool|null,
-  "valor": float,
-  "link": str,
-  "foto": str|null,
-  "fonte": str           # "zap" | "vivareal" | "imovelweb" | "quintoandar"
-}
 """
 import json
 import re
@@ -35,28 +8,20 @@ import sys
 import hashlib
 from datetime import date
 
-# Classificação de bairros de Piracicaba fornecida pelo usuário (família com
-# crianças de 3 e 10 anos, produção criativa em casa, foco em escolas
-# progressistas). Nível 1 = melhor. Nível 4 = não recomendado (excluído da
-# busca por padrão).
 BAIRRO_NIVEL = {
-    # Nível 1 — excelente / espaço generoso
     "nova piracicaba": 1,
     "jardim europa": 1,
-    # Nível 2 — muito bom / equilíbrio escola-espaço
     "sao dimas": 2,
     "jardim elite": 2,
     "vila monteiro": 2,
     "higienopolis": 2,
     "vila rezende": 2,
     "alemaes": 2,
-    # Nível 3 — viável / custo-benefício de espaço
     "campestre": 3,
     "piracicamirim": 3,
     "alto": 3,
     "cidade alta": 3,
     "bairro alto": 3,
-    # Nível 4 — não recomendado
     "santa terezinha": 4,
     "santa teresinha": 4,
     "mario dedini": 4,
@@ -66,11 +31,6 @@ BAIRRO_NIVEL = {
     "balbo": 4,
 }
 
-# "Bairro seguro" (usado no critério de tier 4 — casa em rua com edícula) =
-# qualquer bairro classificado como Nível 1, 2 ou 3 nesta lista. Bairros fora
-# da lista não são automaticamente considerados seguros nem inseguros — ficam
-# como "não classificado" (nivel=None) e ainda aparecem no dashboard, só não
-# contam pontos extra de segurança.
 NIVEL_SEGURO_MAX = 3
 NIVEL_NAO_RECOMENDADO = 4
 
@@ -173,13 +133,27 @@ def within_budget(item):
     return False
 
 
+def is_chacara_tipo(item):
+    tipo = _norm(item.get("tipo", ""))
+    return "chacara" in tipo or "sitio" in tipo or "fazenda" in tipo
+
+
+def is_chacara_condominio(item):
+    # Chácara em condomínio fechado é exceção ao teto de orçamento (pedido do
+    # usuário em 13/08/2026: "chácaras de condomínio são ouro, buscar mesmo
+    # além ou aquém do orçamento"). Vale tanto para acima do teto quanto para
+    # valores muito baixos (pechincha).
+    return is_chacara_tipo(item) and bool(item.get("condominio_fechado"))
+
+
 def build_dataset(raw_listings, existing_dataset, today=None):
     today = today or date.today().isoformat()
     by_id = {item["id"]: item for item in existing_dataset}
     seen_today = set()
 
     for raw in raw_listings:
-        if not within_budget(raw):
+        chacara_condo_excecao = is_chacara_condominio(raw)
+        if not chacara_condo_excecao and not within_budget(raw):
             continue
         if is_bairro_nao_recomendado(raw.get("bairro", "")):
             continue
@@ -192,10 +166,10 @@ def build_dataset(raw_listings, existing_dataset, today=None):
             rec["dias_na_lista"] = (
                 date.fromisoformat(today) - date.fromisoformat(rec["first_seen"])
             ).days + 1
-            # atualiza dados que podem ter mudado (preço, etc.) sem apagar flags do usuário
             for k in ("valor", "titulo", "foto"):
                 if raw.get(k):
                     rec[k] = raw[k]
+            rec["fora_orcamento"] = chacara_condo_excecao and not within_budget(raw)
         else:
             by_id[iid] = {
                 **raw,
@@ -209,10 +183,9 @@ def build_dataset(raw_listings, existing_dataset, today=None):
                 "dias_na_lista": 1,
                 "excluded": False,
                 "favorite": False,
+                "fora_orcamento": chacara_condo_excecao and not within_budget(raw),
             }
 
-    # imóveis que já existiam mas não vieram nesta rodada continuam no dataset
-    # (útil para não perder histórico), apenas não atualizamos last_seen/dias.
     return list(by_id.values())
 
 
@@ -339,12 +312,10 @@ const DATA = __DATA_JSON__;
 const TIER_LABELS = {1:"🥇 Chácara em condomínio",2:"🥈 Casa em condomínio c/ edícula",20:"🥈? Casa em condomínio — verificar edícula",3:"🥉 Casa em condomínio 4qts",4:"🏡 Casa em rua c/ edícula (bairro seguro)",40:"🏡? Casa em rua, bairro seguro — verificar edícula",5:"🏠 Casa em rua, terreno grande",6:"🏢 Apartamento grande",99:"📋 Outros"};
 const TIER_COLORS = {1:"#7c3aed",2:"#2563eb",20:"#3b82f6",3:"#0891b2",4:"#059669",40:"#10b981",5:"#65a30d",6:"#ca8a04",99:"#6b7280"};
 
-// Cache local para renderizar instantaneamente; a fonte da verdade é o Firestore,
-// que sincroniza favoritos/exclusões entre qualquer navegador/dispositivo.
 const LS_KEY = "piracicaba_overrides_cache_v1";
 function loadCache(){ try{return JSON.parse(localStorage.getItem(LS_KEY))||{};}catch(e){return {};} }
 function saveCache(o){ localStorage.setItem(LS_KEY, JSON.stringify(o)); }
-let overrides = loadCache(); // { [id]: {excluded:bool, favorite:bool} }
+let overrides = loadCache();
 let firestoreReady = false;
 
 onSnapshot(collection(db, STATUS_COLLECTION), (snap)=>{
@@ -449,6 +420,7 @@ function render(){
           ${item.bairro_nivel ? `<span class="tag safe">bairro nível ${item.bairro_nivel}</span>` : ''}
           ${item.condominio_fechado ? '<span class="tag">condomínio fechado</span>' : ''}
           ${item.edicula ? '<span class="tag">edícula</span>' : ''}
+          ${item.fora_orcamento ? '<span class="tag" style="color:#fbbf24;border-color:#78350f;">⚠️ fora do orçamento</span>' : ''}
         </div>
         <div class="days">Na lista há ${item.dias_na_lista} dia(s) · desde ${item.first_seen} · visto por último em ${item.last_seen}</div>
       </div>
