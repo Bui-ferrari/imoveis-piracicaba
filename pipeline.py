@@ -146,12 +146,47 @@ def is_chacara_condominio(item):
     return is_chacara_tipo(item) and bool(item.get("condominio_fechado"))
 
 
+# Tipos que NUNCA batem com nenhum dos 6 tiers prioritários — não fazem
+# sentido nesta busca (pedido do usuário em 13/08/2026: parar de trazer
+# "lixo" fora do tipo/metragem/valor procurados). Terreno/lote não tem
+# quartos; salas/pontos comerciais e barracões não são residência; kitnet/
+# studio/flat são unidades muito pequenas para uma família.
+TIPOS_IRRELEVANTES = {
+    "terreno", "lote", "lote terreno", "comercial", "sala comercial",
+    "ponto comercial", "loja", "salao", "barracao", "predio comercial",
+    "kitnet", "studio", "flat",
+}
+
+
+def is_tipo_relevante(item):
+    tipo = _norm(item.get("tipo", ""))
+    if any(t in tipo for t in TIPOS_IRRELEVANTES):
+        return False
+    is_apto = "apartamento" in tipo or "apto" in tipo
+    if is_apto:
+        # Apartamento só pode bater o tier 6 (4+ quartos, 250m²+). Qualquer
+        # apartamento bem abaixo disso nunca vai virar tier 1-6 — é ruído.
+        # Damos uma margem (150m²/3 qts) pra não descartar algo que a
+        # extração tenha subestimado.
+        area = item.get("area_m2") or 0
+        quartos = item.get("quartos") or 0
+        if area and area < 150 and quartos < 4:
+            return False
+    return True
+
+
 def build_dataset(raw_listings, existing_dataset, today=None):
     today = today or date.today().isoformat()
-    by_id = {item["id"]: item for item in existing_dataset}
+    # Remove do histórico existente qualquer registro de tipo irrelevante que
+    # tenha entrado em execuções anteriores (antes deste filtro existir).
+    by_id = {
+        item["id"]: item for item in existing_dataset if is_tipo_relevante(item)
+    }
     seen_today = set()
 
     for raw in raw_listings:
+        if not is_tipo_relevante(raw):
+            continue
         chacara_condo_excecao = is_chacara_condominio(raw)
         if not chacara_condo_excecao and not within_budget(raw):
             continue
@@ -285,6 +320,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <option value="fav">⭐ Só favoritos</option>
   </select>
   <input id="f-preco" type="number" placeholder="Preço máx (R$)">
+  <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);padding:0 6px;">
+    <input type="checkbox" id="f-hide99" checked> Esconder "fora dos critérios" (tier 99)
+  </label>
   <button class="primary" id="btn-reset">Limpar filtros</button>
 </div>
 
@@ -376,6 +414,7 @@ function currentFilters(){
     dias: document.getElementById("f-dias").value,
     fav: document.getElementById("f-fav").value,
     preco: document.getElementById("f-preco").value,
+    hide99: document.getElementById("f-hide99").checked,
   };
 }
 
@@ -388,6 +427,7 @@ function render(){
   const filtered = DATA.filter(item=>{
     const st = getState(item);
     if(st.excluded) return false;
+    if(f.hide99 && item.tier === 99 && !f.tier) return false;
     if(f.tier && String(item.tier) !== f.tier) return false;
     if(f.transacao && item.transacao !== f.transacao) return false;
     if(f.tipo && item.tipo !== f.tipo) return false;
@@ -451,13 +491,14 @@ function render(){
   `;
 }
 
-["f-tier","f-transacao","f-tipo","f-bairro","f-dias","f-fav"].forEach(id=>{
+["f-tier","f-transacao","f-tipo","f-bairro","f-dias","f-fav","f-hide99"].forEach(id=>{
   document.getElementById(id).addEventListener("change", render);
 });
 document.getElementById("f-preco").addEventListener("input", render);
 document.getElementById("btn-reset").onclick = ()=>{
   ["f-tier","f-transacao","f-tipo","f-bairro","f-dias","f-fav"].forEach(id=>document.getElementById(id).value="");
   document.getElementById("f-preco").value="";
+  document.getElementById("f-hide99").checked = true;
   render();
 };
 
