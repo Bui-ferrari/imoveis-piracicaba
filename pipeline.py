@@ -204,6 +204,10 @@ def build_dataset(raw_listings, existing_dataset, today=None):
             for k in ("valor", "titulo", "foto"):
                 if raw.get(k):
                     rec[k] = raw[k]
+            # Recompute tier/condominio_fechado in case heuristics improved
+            rec["condominio_fechado"] = raw.get("condominio_fechado", rec.get("condominio_fechado"))
+            rec["tier"] = classify_tier(rec)
+            rec["tier_label"] = TIER_LABELS.get(rec["tier"], "Outros")
             rec["fora_orcamento"] = chacara_condo_excecao and not within_budget(raw)
         else:
             by_id[iid] = {
