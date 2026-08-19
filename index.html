@@ -33,6 +33,11 @@
   .thumb{width:100%;height:150px;object-fit:cover;background:#000;}
   .thumb.none{display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:12px;}
   .tier-badge{display:inline-block;font-size:11px;font-weight:700;padding:3px 8px;border-radius:6px;color:#fff;margin-bottom:6px;}
+  .card{position:relative;}
+  .badge-new{position:absolute;top:10px;right:10px;z-index:2;background:#f59e0b;color:#111;
+             font-size:11px;font-weight:800;letter-spacing:.03em;padding:4px 9px;border-radius:20px;
+             box-shadow:0 2px 6px rgba(0,0,0,.35);}
+  .entry-date{font-size:11px;color:var(--muted);font-weight:600;}
   .body{padding:12px 14px;display:flex;flex-direction:column;gap:6px;flex:1;}
   .title{font-size:14px;font-weight:600;line-height:1.3;}
   .row{font-size:12.5px;color:var(--muted);display:flex;justify-content:space-between;}
@@ -207,7 +212,9 @@ function render(){
     const thumb = item.foto
       ? `<img class="thumb" src="${item.foto}" onerror="this.style.display='none'">`
       : `<div class="thumb none">sem foto</div>`;
+    const isNovo = item.dias_na_lista === 1;
     card.innerHTML = `
+      ${isNovo ? '<span class="badge-new">🆕 NOVO HOJE</span>' : ''}
       ${thumb}
       <div class="body">
         <span class="tier-badge" style="background:${TIER_COLORS[item.tier]}">${TIER_LABELS[item.tier]}</span>
@@ -223,7 +230,7 @@ function render(){
           ${item.edicula ? '<span class="tag">edícula</span>' : ''}
           ${item.fora_orcamento ? '<span class="tag" style="color:#fbbf24;border-color:#78350f;">⚠️ fora do orçamento</span>' : ''}
         </div>
-        <div class="days">Na lista há ${item.dias_na_lista} dia(s) · desde ${item.first_seen} · visto por último em ${item.last_seen}</div>
+        <div class="days"><span class="entry-date">📅 Entrou na lista em ${item.first_seen}</span> · há ${item.dias_na_lista} dia(s) · visto por último em ${item.last_seen}</div>
       </div>
       <div class="actions">
         <a class="link-btn" href="${item.link}" target="_blank"><button>Ver anúncio ↗</button></a>
